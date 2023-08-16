@@ -21,7 +21,20 @@
         "command": "vs-bs.helloWorld",
         "title": "Hello World"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "vs-bs",
+      "properties": {
+        "yourExtension.excludeFolders": {
+          "type": "array",
+          "default": [
+            "node_modules",
+            "dist"
+          ],
+          "description": "Folders to exclude from execution."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "yarn run package",

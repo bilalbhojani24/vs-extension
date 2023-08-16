@@ -1,27 +1,108 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import * as Path from 'path';
 
-const propsArray = [
-  { name: 'label', description: 'The label for the button', value: 'string' },
-  {
-    name: 'color',
-    description: 'The color of the button',
-    value: 'string',
-    options: ['primary', 'secondary', 'default'],
-  },
-  {
-    name: 'disabled',
-    description: 'Whether the button is disabled',
-    value: 'boolean',
-  },
-  {
-    name: 'options',
-    description: 'Available options',
-    value: 'array',
-    options: ['option1', 'option2', 'option3'],
-  },
-];
+import {
+  findNearestPackageJson,
+  checkDependency,
+} from './utils';
+
+interface ICacheMemory {
+  [key: string]: {
+    options: Array<any>;
+    components: Array<string>;
+  };
+}
+class MaterialUICompletionItem extends vscode.CompletionItem {
+  components?: string[];
+  icons?: string[];
+}
+
+const cacheMemory: ICacheMemory = {};
+let currentPkgApp: string = '';
+let currentPkgAppPath: string = '';
+let bifrostVersion: string = '';
+let folderChanged: boolean = false;
+let currentFilePath: string = '';
+let LIST_OF_COMPONENTS: Array<string> = [];
+
+const onReload = () => {
+  let activeEditor = vscode.window.activeTextEditor;
+
+  if (activeEditor) {
+    let nearestPackageJson: Array<string> | null = findNearestPackageJson(
+      activeEditor.document.uri.fsPath
+    );
+
+    if (nearestPackageJson && nearestPackageJson.length === 3) {
+      const getBifrostVersion = checkDependency(
+        nearestPackageJson[0],
+        '@browserstack/bifrost'
+      );
+
+      if (getBifrostVersion) {
+        bifrostVersion = getBifrostVersion;
+      }
+
+      currentPkgApp = nearestPackageJson[2];
+
+      currentPkgAppPath = nearestPackageJson[1];
+
+      if (
+        cacheMemory[bifrostVersion] ||
+        cacheMemory[bifrostVersion]?.options?.length
+      ) {
+        console.log('Cached entry reload...');
+        LIST_OF_COMPONENTS = cacheMemory[bifrostVersion]?.components;
+      } else {
+        console.log('Fresh entry reload...');
+        const rawData = fs.readFileSync(
+          currentPkgAppPath +
+            '/node_modules/@browserstack/bifrost/dist/snippets.json'
+        ) as any;
+
+        const snippets = JSON.parse(rawData);
+
+        !(bifrostVersion in cacheMemory) &&
+          (cacheMemory[bifrostVersion] = {
+            options: [],
+            components: [],
+          });
+
+        const props = getPropsList(snippets);
+            const list = Object.keys(props);
+            LIST_OF_COMPONENTS = list;
+            cacheMemory[bifrostVersion].components = list;
+            cacheMemory[bifrostVersion].meta = props;
+      }
+    }
+  }
+};
+
+
+const getPropsList = (snips) => {
+  const propList = {};
+
+  for (const componentPath in snips) {
+    if (snips.hasOwnProperty(componentPath)) {
+      const componentInfo = snips[componentPath][0];
+      const componentName = componentInfo.displayName;
+      const componentProps = componentInfo.props;
+
+      const propsArray = [];
+
+      for (const propName in componentProps) {
+        if (componentProps.hasOwnProperty(propName)) {
+          const propType = componentProps[propName].type.name;
+          const description = componentProps[propName].description;
+          propsArray.push({ name: propName, type: propType, description });
+        }
+      }
+
+      propList[componentName] = { component: componentName, props: propsArray };
+    }
+  }
+  return propList;
+};
 
 function isComponentImportedFromLibrary(document, componentName) {
   const text = document.getText();
@@ -36,7 +117,7 @@ function isComponentImportedFromLibrary(document, componentName) {
   for (const match of matches) {
     if (
       match.includes(componentName) &&
-      Object.keys(snippets).includes(componentName)
+      LIST_OF_COMPONENTS.includes(componentName)
     ) {
       return true;
     }
@@ -55,19 +136,15 @@ function provideHover(document, position) {
 
   if (isComponentImportedFromLibrary(document, hoveredWord)) {
     const formatProp = (prop) => {
-      const propType = `[${prop.value}]`;
-      const description = prop.description;
-      const options = prop.options
-        ? `\nOptions: ${prop.options
-            .map((option) => `**${option}**`)
-            .join(', ')}`
-        : '';
-
-      return `- **${prop.name}** ${propType} : ${description}${options}`;
+      return `- **${prop.name}** (${prop.type}) ${
+        prop.description ? ': ' + prop.description : ''
+      }`;
     };
 
+    const props = cacheMemory[bifrostVersion].meta[hoveredWord];
+
     const tooltipContent = new vscode.MarkdownString(
-      `${hoveredWord} : description\n\nProps:\n${propsArray
+      `import { ${hoveredWord} } from "@browserstack/bifrost";\n\n${hoveredWord} : description\n\nProps:\n${props.props
         .map(formatProp)
         .join(
           '\n'
@@ -78,108 +155,122 @@ function provideHover(document, position) {
   }
 }
 
-class MaterialUICompletionItem extends vscode.CompletionItem {
-  components?: string[];
-  icons?: string[];
-}
-
-function getCurrentFilePath() {
-  const activeTextEditor = vscode.window.activeTextEditor;
-  if (activeTextEditor) {
-    return activeTextEditor.document.uri.fsPath;
-  }
-  return null;
-}
-
-function getWorkspacePaths() {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (workspaceFolders) {
-    return workspaceFolders.map((folder) => folder.uri.fsPath);
-  }
-  return [];
-}
-
 export async function activate(
   context: vscode.ExtensionContext
 ): Promise<void> {
-  console.log(__dirname);
-  const rawData = fs.readFileSync(__dirname + '/output.json');
+  // on reload of extension
+  onReload();
 
-  const snippets = JSON.parse(rawData);
+  // on any file change
+  vscode.window.onDidChangeActiveTextEditor((editor) => {
+    if (editor) {
+      currentFilePath = editor.document.fileName;
+      let activeEditor = vscode.window.activeTextEditor;
 
-  let lastFolder = null;
-  let currentFolderName = null;
+      if (activeEditor && !currentFilePath.includes(currentPkgApp)) {
+        console.log('Folder changed!!');
+        folderChanged = true;
+        let nearestPackageJson: Array<string> | null = findNearestPackageJson(
+          activeEditor.document.uri.fsPath
+        );
 
-  if (getCurrentFilePath()?.includes('growth-demo-app')) {
-    currentFolderName = 'growth-demo';
-    lastFolder = 'growth-demo';
-  } else {
-    currentFolderName = 'other';
-  }
+        if (nearestPackageJson && nearestPackageJson.length === 3) {
+          const getBifrostVersion = checkDependency(
+            nearestPackageJson[0],
+            '@browserstack/bifrost'
+          );
+
+          if (getBifrostVersion) {
+            bifrostVersion = getBifrostVersion;
+          }
+
+          currentPkgApp = nearestPackageJson[2];
+
+          currentPkgAppPath = nearestPackageJson[1];
+
+          if (
+            cacheMemory[bifrostVersion] ||
+            cacheMemory[bifrostVersion]?.options?.length
+          ) {
+            console.log('Cached entry change...');
+            LIST_OF_COMPONENTS = cacheMemory[bifrostVersion]?.components;
+          } else {
+            console.log('Fresh entry change...');
+
+            const rawData = fs.readFileSync(
+              currentPkgAppPath +
+                '/node_modules/@browserstack/bifrost/dist/snippets.json'
+            ) as any;
+
+            const snippets = JSON.parse(rawData);
+
+            !(bifrostVersion in cacheMemory) &&
+              (cacheMemory[bifrostVersion] = {
+                options: [],
+                components: [],
+              });
+
+            const props = getPropsList(snippets);
+            const list = Object.keys(props);
+            LIST_OF_COMPONENTS = list;
+            cacheMemory[bifrostVersion].components = list;
+            cacheMemory[bifrostVersion].meta = props;
+          }
+        }
+      } else {
+        folderChanged = false;
+      }
+    }
+  });
 
   for (const language of ['javascript', 'javascriptreact', 'typescriptreact']) {
     let lastOptions = null;
-    let lastCompletionItems: MaterialUICompletionItem[] = [];
 
     const getCompletionItems = (options: any): MaterialUICompletionItem[] => {
-      const currentFolderPath = getCurrentFilePath();
-
-      if (currentFolderPath?.includes('growth-demo-app')) {
-        currentFolderName = 'growth-demo';
-      } else if (currentFolderPath?.includes('tcm')) {
-        currentFolderName = 'tcm';
-      } else {
-        currentFolderName = 'other';
-      }
-
-      if (lastFolder === currentFolderName && lastCompletionItems.length) {
-        return lastCompletionItems;
-      } else {
-        console.log('diff');
-        lastFolder = currentFolderName;
-      }
-      // if (shallowEqual(options, lastOptions)) {
-      //   return lastCompletionItems;
-      // }
       lastOptions = options;
       const result = [];
+
+      if (
+        cacheMemory[bifrostVersion] &&
+        cacheMemory[bifrostVersion].options.length
+      ) {
+        console.log('picked from cache!!');
+        return cacheMemory[bifrostVersion].options;
+      }
+
+      const rawData = fs.readFileSync(
+        currentPkgAppPath +
+          '/node_modules/@browserstack/bifrost/dist/snippets.json'
+      ) as any; // TODO: type annote
+
+      const snippets = JSON.parse(rawData);
+
       for (const key in snippets) {
         if (snippets.hasOwnProperty(key)) {
-          console.count('key');
-          const { displayName, prefix, description, body } = snippets[key][0];
-          // const { text, components, icons } = createSnippet(snippet, options);
+          const { displayName, description } = snippets[key][0];
+          const body = `<${displayName}>{$1}</${displayName}>`;
           const completion = new MaterialUICompletionItem('bi' + displayName);
           completion.insertText = new vscode.SnippetString(body);
           completion.documentation = new vscode.MarkdownString(description);
-          completion.components = ['I am component', '2'];
-          // completion.icons = icons;
+          completion.components = [];
           result.push(completion);
         }
       }
-      // for (const snippet of Object.values(snippets)) {
-      //   console.log(snippet);
-      //   const { displayName,prefix, description, body } = snippet;
-      //   // const { text, components, icons } = createSnippet(snippet, options);
-      //   const completion = new MaterialUICompletionItem("bi" + displayName);
-      //   completion.insertText = new vscode.SnippetString(body);
-      //   completion.documentation = new vscode.MarkdownString(description);
-      //   completion.components = ['I am component', '2'];
-      //   // completion.icons = icons;
-      //   result.push(completion);
-      // }
-      return (lastCompletionItems = result);
+
+      !(bifrostVersion in cacheMemory) &&
+        (cacheMemory[bifrostVersion] = {
+          options: [],
+          components: [],
+        });
+
+      cacheMemory[bifrostVersion].options = result;
+
+      return result;
     };
 
     context.subscriptions.push(
       vscode.languages.registerCompletionItemProvider(language, {
-        provideCompletionItems(
-          /* eslint-disable @typescript-eslint/no-unused-vars */
-          document: vscode.TextDocument,
-          position: vscode.Position,
-          token: vscode.CancellationToken,
-          context: vscode.CompletionContext
-          /* eslint-enable @typescript-eslint/no-unused-vars */
-        ): vscode.ProviderResult<
+        provideCompletionItems(): vscode.ProviderResult<
           | MaterialUICompletionItem[]
           | vscode.CompletionList<MaterialUICompletionItem>
         > {
@@ -190,11 +281,12 @@ export async function activate(
       })
     );
   }
-
   context.subscriptions.push(
     vscode.languages.registerHoverProvider('javascript', { provideHover })
   );
   context.subscriptions.push(
-    vscode.languages.registerHoverProvider('javascriptreact', { provideHover })
+    vscode.languages.registerHoverProvider('javascriptreact', {
+      provideHover,
+    })
   );
 }
