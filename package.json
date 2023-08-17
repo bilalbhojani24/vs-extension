@@ -1,6 +1,6 @@
 {
-  "name": "vs-bs",
-  "displayName": "vs-bs",
+  "name": "bui-snippets",
+  "displayName": "bui-snippets",
   "description": "",
   "version": "0.0.1",
   "engines": {
@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",
+    "@types/jscodeshift": "^0.11.6",
     "@types/mocha": "^10.0.1",
     "@types/node": "20.2.5",
     "@types/vscode": "^1.70.0",
@@ -66,7 +67,9 @@
   "dependencies": {
     "@types/react": "^18.2.20",
     "axios": "^1.4.0",
+    "babel-parse-wild-code": "^2.1.5",
     "find-nearest-package-json": "^2.0.1",
+    "jscodeshift": "^0.15.0",
     "react": "^18.2.0"
   }
 }

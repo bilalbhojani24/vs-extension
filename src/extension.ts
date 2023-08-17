@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 
-import {
+import getExistingImports, {
   findNearestPackageJson,
   checkDependency,
 } from './utils';
@@ -10,6 +10,8 @@ interface ICacheMemory {
   [key: string]: {
     options: Array<any>;
     components: Array<string>;
+    // TODO: Type update
+    meta: any;
   };
 }
 class MaterialUICompletionItem extends vscode.CompletionItem {
@@ -65,22 +67,23 @@ const onReload = () => {
         !(bifrostVersion in cacheMemory) &&
           (cacheMemory[bifrostVersion] = {
             options: [],
-            components: [],
+          components: [],
+            meta : {}
           });
 
         const props = getPropsList(snippets);
-            const list = Object.keys(props);
-            LIST_OF_COMPONENTS = list;
-            cacheMemory[bifrostVersion].components = list;
-            cacheMemory[bifrostVersion].meta = props;
+        const list = Object.keys(props);
+        LIST_OF_COMPONENTS = list;
+        cacheMemory[bifrostVersion].components = list;
+        cacheMemory[bifrostVersion].meta = props;
       }
     }
   }
 };
 
-
-const getPropsList = (snips) => {
-  const propList = {};
+// TODO: Type update
+const getPropsList = (snips: any) => {
+  const propList = {} as any;
 
   for (const componentPath in snips) {
     if (snips.hasOwnProperty(componentPath)) {
@@ -104,29 +107,30 @@ const getPropsList = (snips) => {
   return propList;
 };
 
-function isComponentImportedFromLibrary(document, componentName) {
-  const text = document.getText();
-  const importStatementRegex =
-    /import\s*{[^}]*}\s*from\s*['"]@browserstack\/bifrost['"]/g;
-  const matches = text.match(importStatementRegex);
+// const isComponentImportedFromLibrary = (document, componentName) => {
+//   const text = document.getText();
+//   const importStatementRegex =
+//     /import\s*{[^}]*}\s*from\s*['"]@browserstack\/bifrost['"]/g;
+//   const matches = text.match(importStatementRegex);
 
-  if (!matches) {
-    return false;
-  }
+//   if (!matches) {
+//     return false;
+//   }
 
-  for (const match of matches) {
-    if (
-      match.includes(componentName) &&
-      LIST_OF_COMPONENTS.includes(componentName)
-    ) {
-      return true;
-    }
-  }
+//   for (const match of matches) {
+//     if (
+//       match.includes(componentName) &&
+//       LIST_OF_COMPONENTS.includes(componentName)
+//     ) {
+//       return true;
+//     }
+//   }
 
-  return false;
-}
+//   return false;
+// };
 
-function provideHover(document, position) {
+// TODO: Type update
+const provideHover = (document: any, position: any) => {
   const wordRange = document.getWordRangeAtPosition(position);
   if (!wordRange) {
     return;
@@ -134,8 +138,11 @@ function provideHover(document, position) {
 
   const hoveredWord = document.getText(wordRange);
 
-  if (isComponentImportedFromLibrary(document, hoveredWord)) {
-    const formatProp = (prop) => {
+  console.log(LIST_OF_COMPONENTS);
+  console.log(hoveredWord);
+  if (LIST_OF_COMPONENTS.includes(hoveredWord)) {
+    // TODO: Type update
+    const formatProp = (prop: any) => {
       return `- **${prop.name}** (${prop.type}) ${
         prop.description ? ': ' + prop.description : ''
       }`;
@@ -153,6 +160,54 @@ function provideHover(document, position) {
 
     return new vscode.Hover(tooltipContent);
   }
+};
+
+// TODO: Type update
+async function getAdditionalTextEdits({
+  components = [],
+} : any) {
+  const document = vscode.window.activeTextEditor?.document;
+  if (!document || !components.length) {
+    return [];
+  }
+
+  let existingComponents: Set<string>;
+  let insertPosition: vscode.Position = new vscode.Position(0, 0);
+  let coreInsertPosition: vscode.Position | null = null;
+
+  try {
+    ({ existingComponents, insertPosition, coreInsertPosition } =
+      getExistingImports(document));
+  } catch (error) {
+    return [];
+  }
+
+  const corePath = '@browserstack/bifrost';
+
+  const additionalTextEdits: vscode.TextEdit[] = [];
+
+  // TODO: Type update
+  const coreImports = components.filter((c: any) => !existingComponents.has(c));
+  console.log(coreImports);
+  if (coreImports.length) {
+    if (coreInsertPosition) {
+      additionalTextEdits.push(
+        vscode.TextEdit.insert(
+          coreInsertPosition,
+          ', ' + coreImports.join(', ')
+        )
+      );
+    } else {
+      additionalTextEdits.push(
+        vscode.TextEdit.insert(
+          insertPosition,
+          `import { ${coreImports.join(', ')} } from '${corePath}';\n`
+        )
+      );
+    }
+  }
+
+  return additionalTextEdits;
 }
 
 export async function activate(
@@ -208,6 +263,7 @@ export async function activate(
               (cacheMemory[bifrostVersion] = {
                 options: [],
                 components: [],
+                meta: {},
               });
 
             const props = getPropsList(snippets);
@@ -249,10 +305,10 @@ export async function activate(
         if (snippets.hasOwnProperty(key)) {
           const { displayName, description } = snippets[key][0];
           const body = `<${displayName}>{$1}</${displayName}>`;
-          const completion = new MaterialUICompletionItem('bi' + displayName);
+          const completion = new MaterialUICompletionItem('bui' + displayName);
           completion.insertText = new vscode.SnippetString(body);
           completion.documentation = new vscode.MarkdownString(description);
-          completion.components = [];
+          completion.components = [displayName];
           result.push(completion);
         }
       }
@@ -261,6 +317,7 @@ export async function activate(
         (cacheMemory[bifrostVersion] = {
           options: [],
           components: [],
+          meta: {},
         });
 
       cacheMemory[bifrostVersion].options = result;
@@ -277,6 +334,12 @@ export async function activate(
           return getCompletionItems({
             language: language as any,
           });
+        },
+        async resolveCompletionItem(
+          item: MaterialUICompletionItem
+        ): Promise<MaterialUICompletionItem> {
+          item.additionalTextEdits = await getAdditionalTextEdits(item);
+          return item;
         },
       })
     );
