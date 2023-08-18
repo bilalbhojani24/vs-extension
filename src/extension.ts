@@ -12,11 +12,22 @@ interface ICacheMemory {
     components: Array<string>;
     // TODO: Type update
     meta: any;
+    componentMetaData: ComponentMetadataInterface;
   };
 }
 class MaterialUICompletionItem extends vscode.CompletionItem {
   components?: string[];
   icons?: string[];
+}
+
+interface ComponentMetadataNestedInterface {
+  displayName: string;
+  storybook: string;
+  zeroHeight: string;
+}
+
+interface ComponentMetadataInterface {
+  [key: string]: ComponentMetadataNestedInterface;
 }
 
 const cacheMemory: ICacheMemory = {};
@@ -26,6 +37,7 @@ let bifrostVersion: string = '';
 let folderChanged: boolean = false;
 let currentFilePath: string = '';
 let LIST_OF_COMPONENTS: Array<string> = [];
+let COMPONENTS_METADATA: ComponentMetadataInterface = {};
 
 const onReload = () => {
   let activeEditor = vscode.window.activeTextEditor;
@@ -49,14 +61,18 @@ const onReload = () => {
 
       currentPkgAppPath = nearestPackageJson[1];
 
+      // Fetching snippets.json
       if (
         cacheMemory[bifrostVersion] ||
         cacheMemory[bifrostVersion]?.options?.length
       ) {
         console.log('Cached entry reload...');
         LIST_OF_COMPONENTS = cacheMemory[bifrostVersion]?.components;
+        COMPONENTS_METADATA = cacheMemory[bifrostVersion]?.componentMetaData;
       } else {
         console.log('Fresh entry reload...');
+
+        // fetch snippets.json
         const rawData = fs.readFileSync(
           currentPkgAppPath +
             '/node_modules/@browserstack/bifrost/dist/snippets.json'
@@ -64,11 +80,20 @@ const onReload = () => {
 
         const snippets = JSON.parse(rawData);
 
+        // Fetching metadata.json
+        const metaData = fs.readFileSync(
+          currentPkgAppPath +
+            '/node_modules/@browserstack/bifrost/dist/metadata.json'
+        ) as any;
+
+        const metaList = JSON.parse(metaData);
+
         !(bifrostVersion in cacheMemory) &&
           (cacheMemory[bifrostVersion] = {
             options: [],
-          components: [],
-            meta : {}
+            components: [],
+            meta: {},
+            componentMetaData: {},
           });
 
         const props = getPropsList(snippets);
@@ -76,6 +101,8 @@ const onReload = () => {
         LIST_OF_COMPONENTS = list;
         cacheMemory[bifrostVersion].components = list;
         cacheMemory[bifrostVersion].meta = props;
+        cacheMemory[bifrostVersion].componentMetaData = metaList;
+        COMPONENTS_METADATA = metaList;
       }
     }
   }
@@ -89,45 +116,28 @@ const getPropsList = (snips: any) => {
     if (snips.hasOwnProperty(componentPath)) {
       const componentInfo = snips[componentPath][0];
       const componentName = componentInfo.displayName;
+      const componentDescription = componentInfo?.description;
       const componentProps = componentInfo.props;
 
       const propsArray = [];
 
       for (const propName in componentProps) {
         if (componentProps.hasOwnProperty(propName)) {
-          const propType = componentProps[propName].type.name;
-          const description = componentProps[propName].description;
+          const propType = componentProps[propName]?.type?.name;
+          const description = componentProps[propName]?.description;
           propsArray.push({ name: propName, type: propType, description });
         }
       }
 
-      propList[componentName] = { component: componentName, props: propsArray };
+      propList[componentName] = {
+        component: componentName,
+        props: propsArray,
+        description: componentDescription,
+      };
     }
   }
   return propList;
 };
-
-// const isComponentImportedFromLibrary = (document, componentName) => {
-//   const text = document.getText();
-//   const importStatementRegex =
-//     /import\s*{[^}]*}\s*from\s*['"]@browserstack\/bifrost['"]/g;
-//   const matches = text.match(importStatementRegex);
-
-//   if (!matches) {
-//     return false;
-//   }
-
-//   for (const match of matches) {
-//     if (
-//       match.includes(componentName) &&
-//       LIST_OF_COMPONENTS.includes(componentName)
-//     ) {
-//       return true;
-//     }
-//   }
-
-//   return false;
-// };
 
 // TODO: Type update
 const provideHover = (document: any, position: any) => {
@@ -138,8 +148,6 @@ const provideHover = (document: any, position: any) => {
 
   const hoveredWord = document.getText(wordRange);
 
-  console.log(LIST_OF_COMPONENTS);
-  console.log(hoveredWord);
   if (LIST_OF_COMPONENTS.includes(hoveredWord)) {
     // TODO: Type update
     const formatProp = (prop: any) => {
@@ -149,13 +157,14 @@ const provideHover = (document: any, position: any) => {
     };
 
     const props = cacheMemory[bifrostVersion].meta[hoveredWord];
+    const url = COMPONENTS_METADATA[hoveredWord]?.storybook;
+    const description =
+      cacheMemory[bifrostVersion]?.meta[hoveredWord]?.description;
 
     const tooltipContent = new vscode.MarkdownString(
-      `import { ${hoveredWord} } from "@browserstack/bifrost";\n\n${hoveredWord} : description\n\nProps:\n${props.props
+      `import { ${hoveredWord} } from "@browserstack/bifrost";\n\n${hoveredWord} : ${description}\n\nProps:\n${props.props
         .map(formatProp)
-        .join(
-          '\n'
-        )}\n\n[Open Documentation](https://master--63a3f85277e81b426be0fdf8.chromatic.com/?path=/story/application-components-badge--primary)`
+        .join('\n')}\n\n[Storybook Demo](${url})`
     );
 
     return new vscode.Hover(tooltipContent);
@@ -163,9 +172,7 @@ const provideHover = (document: any, position: any) => {
 };
 
 // TODO: Type update
-async function getAdditionalTextEdits({
-  components = [],
-} : any) {
+async function getAdditionalTextEdits({ components = [] }: any) {
   const document = vscode.window.activeTextEditor?.document;
   if (!document || !components.length) {
     return [];
@@ -243,6 +250,15 @@ export async function activate(
 
           currentPkgAppPath = nearestPackageJson[1];
 
+          // Fetching metadata.json
+          const metaData = fs.readFileSync(
+            currentPkgAppPath +
+              '/node_modules/@browserstack/bifrost/dist/metadata.json'
+          ) as any;
+
+          const metaList = JSON.parse(metaData);
+
+          // fetching snippets.json
           if (
             cacheMemory[bifrostVersion] ||
             cacheMemory[bifrostVersion]?.options?.length
@@ -264,6 +280,7 @@ export async function activate(
                 options: [],
                 components: [],
                 meta: {},
+                componentMetaData: {},
               });
 
             const props = getPropsList(snippets);
@@ -271,6 +288,8 @@ export async function activate(
             LIST_OF_COMPONENTS = list;
             cacheMemory[bifrostVersion].components = list;
             cacheMemory[bifrostVersion].meta = props;
+            cacheMemory[bifrostVersion].componentMetaData = metaList;
+            COMPONENTS_METADATA = metaList;
           }
         }
       } else {
@@ -304,7 +323,7 @@ export async function activate(
       for (const key in snippets) {
         if (snippets.hasOwnProperty(key)) {
           const { displayName, description } = snippets[key][0];
-          const body = `<${displayName}>{$1}</${displayName}>`;
+          const body = `<${displayName}>$1</${displayName}>`;
           const completion = new MaterialUICompletionItem('bui' + displayName);
           completion.insertText = new vscode.SnippetString(body);
           completion.documentation = new vscode.MarkdownString(description);
@@ -318,6 +337,7 @@ export async function activate(
           options: [],
           components: [],
           meta: {},
+          componentMetaData: {},
         });
 
       cacheMemory[bifrostVersion].options = result;
