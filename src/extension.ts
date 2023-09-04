@@ -12,7 +12,6 @@ interface ICacheMemory {
     components: Array<string>;
     // TODO: Type update
     meta: any;
-    componentMetaData: ComponentMetadataInterface;
   };
 }
 class MaterialUICompletionItem extends vscode.CompletionItem {
@@ -20,24 +19,14 @@ class MaterialUICompletionItem extends vscode.CompletionItem {
   icons?: string[];
 }
 
-interface ComponentMetadataNestedInterface {
-  displayName: string;
-  storybook: string;
-  zeroHeight: string;
-}
-
-interface ComponentMetadataInterface {
-  [key: string]: ComponentMetadataNestedInterface;
-}
-
-const cacheMemory: ICacheMemory = {};
+// const cacheMemory: ICacheMemory = {};
+const cacheMemory = {} as ICacheMemory;
 let currentPkgApp: string = '';
 let currentPkgAppPath: string = '';
 let bifrostVersion: string = '';
 let folderChanged: boolean = false;
 let currentFilePath: string = '';
 let LIST_OF_COMPONENTS: Array<string> = [];
-let COMPONENTS_METADATA: ComponentMetadataInterface = {};
 
 const onReload = () => {
   let activeEditor = vscode.window.activeTextEditor;
@@ -55,54 +44,43 @@ const onReload = () => {
 
       if (getBifrostVersion) {
         bifrostVersion = getBifrostVersion;
-      }
 
-      currentPkgApp = nearestPackageJson[2];
+        currentPkgApp = nearestPackageJson[2];
 
-      currentPkgAppPath = nearestPackageJson[1];
+        currentPkgAppPath = nearestPackageJson[1];
 
-      // Fetching snippets.json
-      if (
-        cacheMemory[bifrostVersion] ||
-        cacheMemory[bifrostVersion]?.options?.length
-      ) {
-        console.log('Cached entry reload...');
-        LIST_OF_COMPONENTS = cacheMemory[bifrostVersion]?.components;
-        COMPONENTS_METADATA = cacheMemory[bifrostVersion]?.componentMetaData;
-      } else {
-        console.log('Fresh entry reload...');
+        if (
+          cacheMemory[bifrostVersion] ||
+          cacheMemory[bifrostVersion]?.options?.length
+        ) {
+          // console.log('Cached entry reload...');
+          LIST_OF_COMPONENTS = cacheMemory[bifrostVersion]?.components;
+        } else {
+          // console.log('Fresh entry reload...');
+          const fp =
+            currentPkgAppPath +
+            '/node_modules/@browserstack/bifrost/dist/snippets.json';
+          if (fs.existsSync(fp)) {
+            const rawData = fs.readFileSync(fp) as any;
 
-        // fetch snippets.json
-        const rawData = fs.readFileSync(
-          currentPkgAppPath +
-            '/node_modules/@browserstack/bifrost/dist/snippets.json'
-        ) as any;
+            const snippets = JSON.parse(rawData);
 
-        const snippets = JSON.parse(rawData);
+            !(bifrostVersion in cacheMemory) &&
+              (cacheMemory[bifrostVersion] = {
+                options: [],
+                components: [],
+                meta: {},
+              });
 
-        // Fetching metadata.json
-        const metaData = fs.readFileSync(
-          currentPkgAppPath +
-            '/node_modules/@browserstack/bifrost/dist/metadata.json'
-        ) as any;
-
-        const metaList = JSON.parse(metaData);
-
-        !(bifrostVersion in cacheMemory) &&
-          (cacheMemory[bifrostVersion] = {
-            options: [],
-            components: [],
-            meta: {},
-            componentMetaData: {},
-          });
-
-        const props = getPropsList(snippets);
-        const list = Object.keys(props);
-        LIST_OF_COMPONENTS = list;
-        cacheMemory[bifrostVersion].components = list;
-        cacheMemory[bifrostVersion].meta = props;
-        cacheMemory[bifrostVersion].componentMetaData = metaList;
-        COMPONENTS_METADATA = metaList;
+            const props = getPropsList(snippets);
+            const list = Object.keys(props);
+            LIST_OF_COMPONENTS = list;
+            cacheMemory[bifrostVersion].components = list;
+            cacheMemory[bifrostVersion].meta = props;
+          } else {
+            console.error('The file does not exist:', fp);
+          }
+        }
       }
     }
   }
@@ -114,30 +92,53 @@ const getPropsList = (snips: any) => {
 
   for (const componentPath in snips) {
     if (snips.hasOwnProperty(componentPath)) {
-      const componentInfo = snips[componentPath][0];
+      const componentInfo = snips[componentPath];
       const componentName = componentInfo.displayName;
-      const componentDescription = componentInfo?.description;
       const componentProps = componentInfo.props;
 
       const propsArray = [];
 
       for (const propName in componentProps) {
         if (componentProps.hasOwnProperty(propName)) {
-          const propType = componentProps[propName]?.type?.name;
-          const description = componentProps[propName]?.description;
+          const propType = componentProps[propName].type.name;
+          const description = componentProps[propName].description;
           propsArray.push({ name: propName, type: propType, description });
         }
       }
 
       propList[componentName] = {
+        ...componentInfo,
         component: componentName,
         props: propsArray,
-        description: componentDescription,
+        storybook: componentInfo?.storybook || '',
+        zeroHeight: componentInfo?.zeroHeight || '',
       };
     }
   }
   return propList;
 };
+
+// const isComponentImportedFromLibrary = (document, componentName) => {
+//   const text = document.getText();
+//   const importStatementRegex =
+//     /import\s*{[^}]*}\s*from\s*['"]@browserstack\/bifrost['"]/g;
+//   const matches = text.match(importStatementRegex);
+
+//   if (!matches) {
+//     return false;
+//   }
+
+//   for (const match of matches) {
+//     if (
+//       match.includes(componentName) &&
+//       LIST_OF_COMPONENTS.includes(componentName)
+//     ) {
+//       return true;
+//     }
+//   }
+
+//   return false;
+// };
 
 // TODO: Type update
 const provideHover = (document: any, position: any) => {
@@ -156,15 +157,21 @@ const provideHover = (document: any, position: any) => {
       }`;
     };
 
-    const props = cacheMemory[bifrostVersion].meta[hoveredWord];
-    const url = COMPONENTS_METADATA[hoveredWord]?.storybook;
-    const description =
-      cacheMemory[bifrostVersion]?.meta[hoveredWord]?.description;
+    const formatDisplayName = (displayName: any, description: any) => {
+      return `**${displayName}** ${description ? ': ' + description : ''}`;
+    };
+
+    const component = cacheMemory[bifrostVersion].meta[hoveredWord];
 
     const tooltipContent = new vscode.MarkdownString(
-      `import { ${hoveredWord} } from "@browserstack/bifrost";\n\n${hoveredWord} : ${description}\n\nProps:\n${props.props
+      `import { ${hoveredWord} } from "@browserstack/bifrost";\n\n${formatDisplayName(
+        hoveredWord,
+        component?.description
+      )}\n\nProps:\n${component.props
         .map(formatProp)
-        .join('\n')}\n\n[Storybook Demo](${url})`
+        .join('\n')}\n\n[Storybook](${component?.storybook}) | \n[ZeroHeight](${
+        component?.zeroHeight
+      })`
     );
 
     return new vscode.Hover(tooltipContent);
@@ -195,7 +202,7 @@ async function getAdditionalTextEdits({ components = [] }: any) {
 
   // TODO: Type update
   const coreImports = components.filter((c: any) => !existingComponents.has(c));
-  console.log(coreImports);
+
   if (coreImports.length) {
     if (coreInsertPosition) {
       additionalTextEdits.push(
@@ -230,7 +237,7 @@ export async function activate(
       let activeEditor = vscode.window.activeTextEditor;
 
       if (activeEditor && !currentFilePath.includes(currentPkgApp)) {
-        console.log('Folder changed!!');
+        // console.log('Folder changed!!');
         folderChanged = true;
         let nearestPackageJson: Array<string> | null = findNearestPackageJson(
           activeEditor.document.uri.fsPath
@@ -244,52 +251,42 @@ export async function activate(
 
           if (getBifrostVersion) {
             bifrostVersion = getBifrostVersion;
-          }
+            currentPkgApp = nearestPackageJson[2];
+            currentPkgAppPath = nearestPackageJson[1];
 
-          currentPkgApp = nearestPackageJson[2];
+            if (
+              cacheMemory[bifrostVersion] ||
+              cacheMemory[bifrostVersion]?.options?.length
+            ) {
+              // console.log('Text Cached entry change...');
+              LIST_OF_COMPONENTS = cacheMemory[bifrostVersion]?.components;
+            } else {
+              // console.log('Text Fresh entry change...');
 
-          currentPkgAppPath = nearestPackageJson[1];
+              const fp =
+                currentPkgAppPath +
+                '/node_modules/@browserstack/bifrost/dist/snippets.json';
+              if (fs.existsSync(fp)) {
+                const rawData = fs.readFileSync(fp) as any;
 
-          // Fetching metadata.json
-          const metaData = fs.readFileSync(
-            currentPkgAppPath +
-              '/node_modules/@browserstack/bifrost/dist/metadata.json'
-          ) as any;
+                const snippets = JSON.parse(rawData);
 
-          const metaList = JSON.parse(metaData);
+                !(bifrostVersion in cacheMemory) &&
+                  (cacheMemory[bifrostVersion] = {
+                    options: [],
+                    components: [],
+                    meta: {},
+                  });
 
-          // fetching snippets.json
-          if (
-            cacheMemory[bifrostVersion] ||
-            cacheMemory[bifrostVersion]?.options?.length
-          ) {
-            console.log('Cached entry change...');
-            LIST_OF_COMPONENTS = cacheMemory[bifrostVersion]?.components;
-          } else {
-            console.log('Fresh entry change...');
-
-            const rawData = fs.readFileSync(
-              currentPkgAppPath +
-                '/node_modules/@browserstack/bifrost/dist/snippets.json'
-            ) as any;
-
-            const snippets = JSON.parse(rawData);
-
-            !(bifrostVersion in cacheMemory) &&
-              (cacheMemory[bifrostVersion] = {
-                options: [],
-                components: [],
-                meta: {},
-                componentMetaData: {},
-              });
-
-            const props = getPropsList(snippets);
-            const list = Object.keys(props);
-            LIST_OF_COMPONENTS = list;
-            cacheMemory[bifrostVersion].components = list;
-            cacheMemory[bifrostVersion].meta = props;
-            cacheMemory[bifrostVersion].componentMetaData = metaList;
-            COMPONENTS_METADATA = metaList;
+                const props = getPropsList(snippets);
+                const list = Object.keys(props);
+                LIST_OF_COMPONENTS = list;
+                cacheMemory[bifrostVersion].components = list;
+                cacheMemory[bifrostVersion].meta = props;
+              } else {
+                console.error('The file does not exist:', fp);
+              }
+            }
           }
         }
       } else {
@@ -309,7 +306,7 @@ export async function activate(
         cacheMemory[bifrostVersion] &&
         cacheMemory[bifrostVersion].options.length
       ) {
-        console.log('picked from cache!!');
+        // console.log('picked from cache!!');
         return cacheMemory[bifrostVersion].options;
       }
 
@@ -322,7 +319,7 @@ export async function activate(
 
       for (const key in snippets) {
         if (snippets.hasOwnProperty(key)) {
-          const { displayName, description } = snippets[key][0];
+          const { displayName, description } = snippets[key];
           const body = `<${displayName}>$1</${displayName}>`;
           const completion = new MaterialUICompletionItem('bui' + displayName);
           completion.insertText = new vscode.SnippetString(body);
@@ -337,7 +334,6 @@ export async function activate(
           options: [],
           components: [],
           meta: {},
-          componentMetaData: {},
         });
 
       cacheMemory[bifrostVersion].options = result;
