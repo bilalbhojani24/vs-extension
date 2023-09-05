@@ -163,16 +163,29 @@ const provideHover = (document: any, position: any) => {
 
     const component = cacheMemory[bifrostVersion].meta[hoveredWord];
 
-    const tooltipContent = new vscode.MarkdownString(
-      `import { ${hoveredWord} } from "@browserstack/bifrost";\n\n${formatDisplayName(
-        hoveredWord,
-        component?.description
-      )}\n\nProps:\n${component.props
-        .map(formatProp)
-        .join('\n')}\n\n[Storybook](${component?.storybook}) | \n[ZeroHeight](${
-        component?.zeroHeight
-      })`
-    );
+    // const tooltipContent = new vscode.MarkdownString(
+    //   `import { ${hoveredWord} } from "@browserstack/bifrost";\n\n${formatDisplayName(
+    //     hoveredWord,
+    //     component?.description
+    //   )}\n\nProps:\n${component.props
+    //     .map(formatProp)
+    //     .join('\n')}\n\n[Storybook](${component?.storybook}) | \n[ZeroHeight](${
+    //     component?.zeroHeight
+    //   })`
+    // );
+
+    let markdownString = `import { ${hoveredWord} } from "@browserstack/bifrost";\n\n${formatDisplayName(
+      hoveredWord,
+      component?.description
+    )}\n\nProps:\n${component.props
+      .map(formatProp)
+      .join('\n')}\n\n[Storybook](${component?.storybook})`;
+
+    if (component?.zeroHeight) {
+      markdownString += ` | \n[ZeroHeight](${component?.zeroHeight})`;
+    }
+
+    const tooltipContent = new vscode.MarkdownString(markdownString);
 
     return new vscode.Hover(tooltipContent);
   }
